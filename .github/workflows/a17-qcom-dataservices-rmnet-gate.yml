@@ -1,0 +1,69 @@
+name: AOSP17 Qualcomm Data Services RMNET source and host API boundary
+
+on:
+  push:
+    branches:
+      - audit/a17-qcom-dataservices-rmnet-rtnetlink-boundary-20261108
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit-rmnet-uapi-and-aosp17-graph:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Sparse source checkout (no Qualcomm binaries or device trees)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: |
+            Android.bp
+            Makefile.am
+            configure.ac
+            dataservices_vendor_product.mk
+            rmnetctl
+            datatop
+            docs
+            tests
+            .github
+
+      - name: Pin latest audited PE-Reborn AOSP17 manifest and validate all 135 source rows
+        run: |
+          set -euo pipefail
+          git init -q "$RUNNER_TEMP/a17-manifest"
+          git -C "$RUNNER_TEMP/a17-manifest" remote add origin \
+            https://github.com/PixelExperience-Reborn/manifest.git
+          git -C "$RUNNER_TEMP/a17-manifest" fetch -q --depth 1 origin \
+            36e573f777286d21ebc7b2762a6cae390d38a999
+          git -C "$RUNNER_TEMP/a17-manifest" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/a17-manifest" rev-parse HEAD)" = \
+            "36e573f777286d21ebc7b2762a6cae390d38a999"
+          python3 "$RUNNER_TEMP/a17-manifest/tools/validate_aosp17_base_profiles.py"
+          python3 -m unittest discover -s "$RUNNER_TEMP/a17-manifest/tools" \
+            -p test_aosp17_manifest_entrypoint.py -v
+          python3 "$RUNNER_TEMP/a17-manifest/tools/validate_135_repository_matrix.py"
+
+      - name: Check old RMNET kernel UAPI, rtnetlink, Soong providers and untouched archive
+        run: |
+          set -euo pipefail
+          PE_AOSP17_REFERENCE="$RUNNER_TEMP/a17-manifest/aosp17_reference.xml" \
+          PE_AOSP17_DEFAULT="$RUNNER_TEMP/a17-manifest/default.xml" \
+            python3 tests/test_aosp17_rmnet_dataservices_boundary.py
+
+      - name: Host Clang compile and execute public RMNET C header smoke test
+        run: |
+          set -euo pipefail
+          clang -std=c11 -Wall -Wextra -Werror \
+            -I rmnetctl/inc tests/test_rmnet_public_header_host.c \
+            -o "$RUNNER_TEMP/test_rmnet_public_header_host"
+          "$RUNNER_TEMP/test_rmnet_public_header_host"
+
+      - name: Accurate scope
+        run: |
+          echo "Historic 135 repository matrix audited, not built."
+          echo "Host C only: no netlink sockets, Qualcomm binaries, modem or kernel."
+          echo "No full Google AOSP17 repo sync/Soong/image or device tree used."
